@@ -1,3 +1,7 @@
+`%then%` <- function(a, b) {
+    if (is.null(a)) b else a
+}
+
 ui <- shinydashboard::dashboardPage(
     skin = "red",
     shinydashboard::dashboardHeader(title = "WeibullR.shiny"),
@@ -189,7 +193,7 @@ ui <- shinydashboard::dashboardPage(
                                             title = "Data Table",
                                             width = NULL,
                                             collapsible = TRUE,
-                                            rhandsontable::rHandsontableOutput("hot")
+                                            shiny::tableOutput("table")
                                         )
                                     )
                                 )),
@@ -207,11 +211,12 @@ ui <- shinydashboard::dashboardPage(
                                             inputId = "dist",
                                             h5("Distribution:"),
                                             c(
+                                                # "Weibayes" = "weibayes",
                                                 "Weibull 2P" = "weibull",
                                                 "Weibull 3P" = "weibull3p",
-                                                # "Weibayes" = "weibayes",
                                                 "Lognormal" = "lognormal"
-                                            )
+                                            ),
+                                            selected = "weibull"
                                         ),
                                         # Conditional panel for 1P Weibull
                                         shiny::conditionalPanel(
@@ -251,9 +256,22 @@ ui <- shinydashboard::dashboardPage(
                                             )
                                         ),
                                         # Confidence Method
-                                        shiny::selectInput(inputId = "conf",
-                                                           h5("Confidence Method:"),
-                                                           c("")),
+                                        # Conditional Panel for MLE
+                                        shiny::conditionalPanel(
+                                            condition = "input.meth == 'mle'",
+                                            shiny::selectInput(inputId = "mleConf",
+                                                               h5("Confidence Method:"),
+                                                               c("LRB" = "lrb",
+                                                                 "FM" = "fm",
+                                                                 "FMbounds" = "fmbounds"))
+                                        ),
+                                        # Conditional Panel for RR
+                                        shiny::conditionalPanel(
+                                            condition = "input.meth == 'rr-xony'",
+                                            shiny::selectInput(inputId = "rrConf",
+                                                               h5("Confidence Method:"),
+                                                               c("Pivotal-RR" = "pivotal-rr"))
+                                        ),
                                         shiny::sliderInput(inputId = "cl", h5("Confidence Level: "),
                                                            min = 0, max = 0.99, value = 0.9, step = 0.1)
                                     ),
@@ -272,10 +290,24 @@ ui <- shinydashboard::dashboardPage(
                                                     collapsed = TRUE,
                                                     collapsible = TRUE,
                                                     solidHeader = TRUE,
-                                                    # Plot color
+                                                    # Probability color
                                                     shiny::selectInput(
-                                                        inputId = "col",
-                                                        h5("Plot Color:"),
+                                                        inputId = "probcol",
+                                                        h5("Probability Points Color:"),
+                                                        c("black",
+                                                          "blue",
+                                                          "red",
+                                                          "yellow",
+                                                          "green",
+                                                          "orange",
+                                                          "violet"
+                                                        ),
+                                                        selected = "black"
+                                                    ),
+                                                    # Fit color
+                                                    shiny::selectInput(
+                                                        inputId = "fitcol",
+                                                        h5("Fit Color:"),
                                                         c("blue",
                                                           "red",
                                                           "yellow",
@@ -285,7 +317,19 @@ ui <- shinydashboard::dashboardPage(
                                                         ),
                                                         selected = "blue"
                                                     ),
-
+                                                    # CB color
+                                                    shiny::selectInput(
+                                                        inputId = "confcol",
+                                                        h5("Confidence Bounds Color:"),
+                                                        c("blue",
+                                                          "red",
+                                                          "yellow",
+                                                          "green",
+                                                          "orange",
+                                                          "violet"
+                                                        ),
+                                                        selected = "blue"
+                                                    ),
                                                     # Grid color
                                                     shiny::selectInput(
                                                         inputId = "gridcol",
@@ -319,6 +363,10 @@ ui <- shinydashboard::dashboardPage(
                                                         h5("Significant Digits:"),
                                                         value = 3
                                                     ),
+                                                    # Show CB
+                                                    # shiny::checkboxInput("confBounds",
+                                                    #                      label = "Show confidence bounds?",
+                                                    #                      value = TRUE),
                                                     # Show suspensions plot
                                                     shiny::checkboxInput("suspPlot",
                                                                          label = "Show suspensions plot?",
@@ -399,11 +447,9 @@ ui <- shinydashboard::dashboardPage(
     ))
 )
 
-`%then%` <- function(a, b) {
-    if (is.null(a)) b else a
-}
-
 server <- function(input, output, session) {
+
+    session$onSessionEnded(stopApp)
 
     # Example Time-to-Failure data
     acid_gas_compressor <- read.csv('data/acid_gas_compressor.csv')
@@ -412,7 +458,7 @@ server <- function(input, output, session) {
     output$failure_data <- shiny::downloadHandler(
         filename = "acid_gas_compressor.csv",
         content = function(file) {
-            write.csv(acid_gas_compressor, file)
+            write.csv(acid_gas_compressor, file, row.names = FALSE)
         }
     )
 
@@ -423,7 +469,7 @@ server <- function(input, output, session) {
     output$censored_data <- shiny::downloadHandler(
         filename = "treat6mp.csv",
         content = function(file) {
-            write.csv(treat6mp, file)
+            write.csv(treat6mp, file, row.names = FALSE)
         }
     )
 
@@ -528,7 +574,7 @@ server <- function(input, output, session) {
     })
 
     # Create a table of the user dataset
-    output$hot = rhandsontable::renderRHandsontable({
+    output$table = shiny::renderTable({
         if (is.null(dat()))
             return(NULL)
 
@@ -536,14 +582,8 @@ server <- function(input, output, session) {
             shiny::need(!is.null(dat()), message = FALSE)
         )
 
-        if (!is.null(input$hot)) {
-            DF = rhandsontable::hot_to_r(input$hot)
-        } else {
-            DF = dat()
-        }
-
-        rhandsontable::rhandsontable(DF, readOnly = TRUE)
-    })
+        dat()
+    }, striped = TRUE, hover = TRUE, bordered = TRUE, align = 'c')
 
     # Create a table of the user dataset
     # output$table <- DT::renderDT({
@@ -597,6 +637,10 @@ server <- function(input, output, session) {
                 )
         )
 
+        # Get the confidence method
+        if (input$meth == "mle") confMeth <- input$mleConf
+        else confMeth = input$rrConf
+
         # Run the wblr object (Weibayes)
         if (input$dist == "weibayes") {
 
@@ -626,7 +670,7 @@ server <- function(input, output, session) {
                     dist = input$dist,
                     method.fit = input$meth
                 ),
-                method.conf = input$conf,
+                method.conf = confMeth,
                 ci = input$cl)
 
         }
@@ -642,22 +686,6 @@ server <- function(input, output, session) {
         }
     })
 
-    # Get the applicable confidence methods
-    confMeth <- shiny::reactive({
-        if (input$meth == "mle") {
-            confMeth <- c("LRB" = "lrb",
-                          "FM" = "fm",
-                          "FMbounds" = "fmbounds")
-        } else {
-            confMeth <- c("Pivotal-RR" = "pivotal-rr")
-        }
-    })
-
-    # Send the confidence method choices to the user
-    shiny::observe({
-        shiny::updateSelectInput(session, "conf", choices = confMeth())
-    })
-
     # Build the probability plot
     output$probPlot <- plotly::renderPlotly({
         if (is.null(wblr_obj()))
@@ -666,14 +694,16 @@ server <- function(input, output, session) {
         WeibullR.plotly::plotly_wblr(
             wblr_obj(),
             susp = susp_vec(),
-            suspplot = input$suspPlot,
-            restab = input$resTab,
+            showSusp = input$suspPlot,
+            showRes = input$resTab,
             main = input$main,
             xlab = input$xlab,
             ylab = input$ylab,
-            col = input$col,
-            gridcol = input$gridcol,
-            grid = input$grid,
+            probCol = input$probcol,
+            fitCol = input$fitcol,
+            confCol = input$confcol,
+            gridCol = input$gridcol,
+            showGrid = input$grid,
             signif = input$signif
         )
 
@@ -685,9 +715,13 @@ server <- function(input, output, session) {
             return(NULL)
         shiny::validate(
             shiny::need(
-                try(input$conf == "lrb"),
-                "Contour plots are only available for the 'LRB' confidence method..."
-            )
+                try(input$meth == "mle"),
+                "Contour plots are only available for the ''MLE' estimation method..."
+            ) %then%
+                shiny::need(
+                    try(input$mleConf == 'lrb'),
+                    "Contour plots are only available for the 'LRB' confidence method..."
+                )
         )
         WeibullR.plotly::plotly_contour(
             wblr_obj(),
@@ -695,8 +729,8 @@ server <- function(input, output, session) {
             xlab = input$xlab2,
             ylab = input$ylab2,
             col = input$col2,
-            gridcol = input$gridcol2,
-            grid = input$grid2,
+            gridCol = input$gridcol2,
+            showGrid = input$grid2,
             signif = input$signif2
         )
     })
